@@ -1,138 +1,134 @@
-from flask import Flask, render_template_string, request, jsonify
-import requests
 import os
 import time
+import requests
+from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
+ASSEMBLY_API_KEY = "fb2974857cdf45fb979feb8f33d26801"
 
-ASSEMBLYAI_API_KEY = "fb2974857cdf45fb979feb8f33d26801"  # Replace with your key
-
-HTML_PAGE = '''
+HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>Voice to Text - Drag & Drop</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding-top: 50px; }
-        .drop-area {
-            border: 3px dashed #aaa;
-            border-radius: 10px;
+        body { font-family: Arial; text-align: center; margin: 40px; }
+        #drop-area {
+            border: 3px dashed #999;
+            border-radius: 20px;
             width: 80%;
             max-width: 600px;
             margin: auto;
-            padding: 50px;
-            cursor: pointer;
-            color: #555;
+            padding: 30px;
+            font-size: 18px;
+            color: #666;
         }
-        .drop-area.hover { background-color: #f0f0f0; }
-        #transcription { margin-top: 30px; font-size: 1.2em; white-space: pre-wrap; }
+        #drop-area.hover { border-color: #666; }
+        #output { margin-top: 30px; font-size: 18px; white-space: pre-wrap; }
     </style>
 </head>
 <body>
-    <h2>🎙️ Drag & Drop your .wav file</h2>
-    <div class="drop-area" id="drop-area">
-        Drop your .wav file here or click to upload
-        <input type="file" id="fileInput" accept=".wav" style="display:none" />
-    </div>
-    <div id="transcription"></div>
+    <h1>🎤 Drag and Drop Your WAV File</h1>
+    <div id="drop-area">Drop your <strong>.wav</strong> file here</div>
+    <div id="output"></div>
 
     <script>
-        const dropArea = document.getElementById('drop-area');
-        const fileInput = document.getElementById('fileInput');
+        const dropArea = document.getElementById("drop-area");
+        const output = document.getElementById("output");
 
-        dropArea.addEventListener('click', () => fileInput.click());
-
-        dropArea.addEventListener('dragover', e => {
-            e.preventDefault();
-            dropArea.classList.add('hover');
+        ["dragenter", "dragover"].forEach(event => {
+            dropArea.addEventListener(event, e => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropArea.classList.add("hover");
+            }, false);
         });
 
-        dropArea.addEventListener('dragleave', () => {
-            dropArea.classList.remove('hover');
+        ["dragleave", "drop"].forEach(event => {
+            dropArea.addEventListener(event, e => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropArea.classList.remove("hover");
+            }, false);
         });
 
-        dropArea.addEventListener('drop', e => {
-            e.preventDefault();
-            dropArea.classList.remove('hover');
+        dropArea.addEventListener("drop", async e => {
             const file = e.dataTransfer.files[0];
-            uploadFile(file);
-        });
-
-        fileInput.addEventListener('change', () => {
-            const file = fileInput.files[0];
-            uploadFile(file);
-        });
-
-        async function uploadFile(file) {
-            if (!file || file.type !== 'audio/wav') {
-                alert('Please upload a valid .wav file');
+            if (!file.name.endsWith(".wav")) {
+                output.innerText = "Please upload a .wav file.";
                 return;
             }
 
             const formData = new FormData();
-            formData.append('file', file);
+            formData.append("file", file);
 
-            document.getElementById('transcription').innerText = 'Uploading and transcribing...';
+            output.innerText = "⏳ Transcribing... Please wait.";
 
-            const response = await fetch('/', {
-                method: 'POST',
+            const res = await fetch("/", {
+                method: "POST",
                 body: formData
             });
 
-            const data = await response.json();
-            if (data.transcription) {
-                document.getElementById('transcription').innerText = '📝 Transcription:\n\n' + data.transcription;
-            } else {
-                document.getElementById('transcription').innerText = '❌ Error:\n' + (data.error || 'Unknown error');
-            }
-        }
+            const result = await res.text();
+            output.innerText = result;
+        });
     </script>
 </body>
 </html>
-'''
+"""
 
-@app.route('/', methods=['GET'])
+@app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML_PAGE)
 
-@app.route('/', methods=['POST'])
+@app.route("/", methods=["POST"])
 def transcribe():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+    if "file" not in request.files:
+        return "No file uploaded", 400
 
-    audio_file = request.files['file']
-    if audio_file.filename == '':
-        return jsonify({"error": "Empty filename"}), 400
+    file = request.files["file"]
+    file_path = os.path.join("/tmp", file.filename)
+    file.save(file_path)
 
-    # Save temporarily
-    file_path = os.path.join("/tmp", audio_file.filename)
-    audio_file.save(file_path)
+    headers = {"authorization": ASSEMBLY_API_KEY}
 
     # Upload to AssemblyAI
-    headers = {'authorization': ASSEMBLYAI_API_KEY}
-    with open(file_path, 'rb') as f:
-        upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers, files={'file': f})
-    if upload_res.status_code != 200:
-        return jsonify({"error": "Upload failed", "details": upload_res.text}), 500
-    audio_url = upload_res.json()['upload_url']
+    with open(file_path, "rb") as f:
+        upload_res = requests.post(
+            "https://api.assemblyai.com/v2/upload",
+            headers=headers,
+            files={"file": f}
+        )
+    audio_url = upload_res.json().get("upload_url")
 
-    # Request transcription
+    # Start transcription
     transcript_res = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         headers={**headers, "content-type": "application/json"},
         json={"audio_url": audio_url}
     )
-    if transcript_res.status_code != 200:
-        return jsonify({"error": "Transcription failed", "details": transcript_res.text}), 500
-    transcript_id = transcript_res.json()['id']
 
-    # Polling
+    transcript_id = transcript_res.json()["id"]
+    polling_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
+
+    # Wait until transcription completes
     while True:
-        poll_res = requests.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers)
-        result = poll_res.json()
-        if result['status'] == 'completed':
-            return jsonify({"transcription": result['text']})
-        elif result['status'] == 'error':
-            return jsonify({"error": "Transcription failed", "details": result['error']}), 500
-        time.sleep(1)
+        status_res = requests.get(polling_url, headers=headers)
+        status = status_res.json()
+        if status["status"] == "completed":
+            break
+        elif status["status"] == "error":
+            return f"Transcription failed: {status['error']}", 500
+        time.sleep(2)
 
+    text = status["text"]
+
+    # Save transcription to file
+    txt_path = os.path.join("/tmp", file.filename.rsplit(".", 1)[0] + ".txt")
+    with open(txt_path, "w") as f:
+        f.write(text)
+
+    return text
+
+if __name__ == "__main__":
+    app.run(debug=True)
