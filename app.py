@@ -1,134 +1,113 @@
 import os
 import time
-import requests
-from flask import Flask, request, render_template_string
+from flask import Flask, render_template, request, redirect, url_for, flash
+from werkzeug.utils import secure_filename
+import assemblyai as aai
+from dotenv import load_dotenv # Used to load API key from .env file
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
-ASSEMBLY_API_KEY = "fb2974857cdf45fb979feb8f33d26801"
+# Configure upload folder and maximum file size
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB limit for uploads
 
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Voice to Text - Drag & Drop</title>
-    <style>
-        body { font-family: Arial; text-align: center; margin: 40px; }
-        #drop-area {
-            border: 3px dashed #999;
-            border-radius: 20px;
-            width: 80%;
-            max-width: 600px;
-            margin: auto;
-            padding: 30px;
-            font-size: 18px;
-            color: #666;
-        }
-        #drop-area.hover { border-color: #666; }
-        #output { margin-top: 30px; font-size: 18px; white-space: pre-wrap; }
-    </style>
-</head>
-<body>
-    <h1>🎤 Drag and Drop Your WAV File</h1>
-    <div id="drop-area">Drop your <strong>.wav</strong> file here</div>
-    <div id="output"></div>
+# Set a secret key for session management (used for flash messages)
+app.secret_key = os.urandom(24) 
 
-    <script>
-        const dropArea = document.getElementById("drop-area");
-        const output = document.getElementById("output");
+# Ensure the upload folder exists when the app starts
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-        ["dragenter", "dragover"].forEach(event => {
-            dropArea.addEventListener(event, e => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropArea.classList.add("hover");
-            }, false);
-        });
+# Set AssemblyAI API Key from environment variable
+# It's crucial that this line executes AFTER load_dotenv()
+aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
-        ["dragleave", "drop"].forEach(event => {
-            dropArea.addEventListener(event, e => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropArea.classList.remove("hover");
-            }, false);
-        });
+# Define allowed file extensions
+ALLOWED_EXTENSIONS = {'wav'}
 
-        dropArea.addEventListener("drop", async e => {
-            const file = e.dataTransfer.files[0];
-            if (!file.name.endsWith(".wav")) {
-                output.innerText = "Please upload a .wav file.";
-                return;
-            }
+def allowed_file(filename):
+    """Checks if a filename has an allowed WAV extension."""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-            const formData = new FormData();
-            formData.append("file", file);
-
-            output.innerText = "⏳ Transcribing... Please wait.";
-
-            const res = await fetch("/", {
-                method: "POST",
-                body: formData
-            });
-
-            const result = await res.text();
-            output.innerText = result;
-        });
-    </script>
-</body>
-</html>
-"""
-
-@app.route("/", methods=["GET"])
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    return render_template_string(HTML_PAGE)
+    """
+    Handles file uploads, transcription, and displays results.
+    Renders the index.html template.
+    """
+    transcribed_text = None
+    error_message = None
 
-@app.route("/", methods=["POST"])
-def transcribe():
-    if "file" not in request.files:
-        return "No file uploaded", 400
+    if request.method == 'POST':
+        # Check if an audio file was submitted in the form
+        if 'audio_file' not in request.files:
+            flash('No file part in the request.')
+            return redirect(request.url)
+        
+        file = request.files['audio_file']
+        
+        # If the user submits an empty file input (no file selected)
+        if file.filename == '':
+            flash('No audio file selected.')
+            return redirect(request.url)
 
-    file = request.files["file"]
-    file_path = os.path.join("/tmp", file.filename)
-    file.save(file_path)
+        # Process the file if it exists and is allowed
+        if file and allowed_file(file.filename):
+            # Secure the filename before saving to prevent directory traversal attacks
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            try:
+                # Save the uploaded file locally
+                file.save(filepath)
 
-    headers = {"authorization": ASSEMBLY_API_KEY}
+                # Initialize AssemblyAI Transcriber
+                transcriber = aai.Transcriber()
+                
+                # Upload the local audio file to AssemblyAI's cloud
+                flash(f'Uploading "{filename}" for transcription...')
+                upload_url = transcriber.upload_file(filepath)
 
-    # Upload to AssemblyAI
-    with open(file_path, "rb") as f:
-        upload_res = requests.post(
-            "https://api.assemblyai.com/v2/upload",
-            headers=headers,
-            files={"file": f}
-        )
-    audio_url = upload_res.json().get("upload_url")
+                # Request transcription with default language (English US)
+                config = aai.TranscriptionConfig(language_code="en_us")
+                transcript = transcriber.transcribe(upload_url, config=config)
 
-    # Start transcription
-    transcript_res = requests.post(
-        "https://api.assemblyai.com/v2/transcript",
-        headers={**headers, "content-type": "application/json"},
-        json={"audio_url": audio_url}
-    )
+                # Check transcription status
+                if transcript.status == aai.TranscriptStatus.completed:
+                    transcribed_text = transcript.text
+                    
+                    # Save the transcribed text locally as a .txt file
+                    txt_filename = os.path.splitext(filename)[0] + ".txt"
+                    txt_filepath = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
+                    with open(txt_filepath, 'w') as f:
+                        f.write(transcribed_text)
+                    flash('File successfully uploaded and transcribed! Text saved locally.')
 
-    transcript_id = transcript_res.json()["id"]
-    polling_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
+                elif transcript.status == aai.TranscriptStatus.error:
+                    error_message = f"Transcription failed: {transcript.error}"
+                    flash(f"Error: {transcript.error}. Please try another file or contact support.")
+                else:
+                    # This case should be rare as .transcribe waits for completion
+                    error_message = f"Transcription status: {transcript.status}. Please try again."
+                    flash(f"Unexpected transcription status: {transcript.status}. Please try again.")
 
-    # Wait until transcription completes
-    while True:
-        status_res = requests.get(polling_url, headers=headers)
-        status = status_res.json()
-        if status["status"] == "completed":
-            break
-        elif status["status"] == "error":
-            return f"Transcription failed: {status['error']}", 500
-        time.sleep(2)
+            except Exception as e:
+                # Catch any unexpected errors during the process
+                error_message = f"An unexpected error occurred: {e}"
+                flash(f"An unexpected error occurred: {e}. Please check your API key and file.")
+            finally:
+                # Clean up: remove the temporary uploaded audio file
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+        else:
+            flash('Invalid file type. Only .wav audio files are allowed.')
 
-    text = status["text"]
+    # Render the HTML template, passing transcribed text and error messages
+    return render_template('index.html', transcribed_text=transcribed_text, error_message=error_message)
 
-    # Save transcription to file
-    txt_path = os.path.join("/tmp", file.filename.rsplit(".", 1)[0] + ".txt")
-    with open(txt_path, "w") as f:
-        f.write(text)
-
-    return text
-
-if __name__ == "__main__":
+if __name__ == '__main__':
+    # Run the Flask development server
+    # debug=True enables auto-reloading on code changes and provides a debugger
     app.run(debug=True)

@@ -1,19 +1,219 @@
-<!doctype html>
-<html>
-  <head>
-    <title>M5Stack Voice Uploader</title>
-  </head>
-  <body>
-    <h1>Upload .wav file</h1>
-    <form method="post" enctype="multipart/form-data">
-      <input type="file" name="audio" accept=".wav" required>
-      <input type="submit" value="Upload and Transcribe">
-    </form>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech-to-Text App</title>
+    <style>
+        /* Basic styling for the body */
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            flex-direction: column;
+            padding: 20px; /* Add some padding for smaller screens */
+            box-sizing: border-box; /* Include padding in element's total width and height */
+        }
+        /* Container for the main content */
+        .container {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            width: 100%; /* Make it responsive */
+            max-width: 600px; /* Max width for larger screens */
+            text-align: center;
+        }
+        /* Heading style */
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        /* Drag-and-drop area styling */
+        .drag-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            transition: border-color 0.3s ease; /* Smooth transition for highlight */
+        }
+        .drag-area.highlight {
+            border-color: #007bff; /* Blue border when dragged over */
+        }
+        .drag-area p {
+            margin: 0;
+            color: #555;
+        }
+        /* Hide the default file input */
+        input[type="file"] {
+            display: none;
+        }
+        /* Button styling (though hidden by JS for auto-submit) */
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        /* Styling for flashed messages */
+        .messages {
+            list-style: none;
+            padding: 0;
+            margin-top: 20px;
+        }
+        .messages li {
+            background-color: #d4edda; /* Light green for success */
+            color: #155724; /* Dark green text */
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .messages li.error {
+            background-color: #f8d7da; /* Light red for errors */
+            color: #721c24; /* Dark red text */
+            border-color: #f5c6cb;
+        }
+        /* Styling for the transcription output area */
+        .transcription-output {
+            margin-top: 30px;
+            text-align: left;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+        .transcription-output h2 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .transcribed-text {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap; /* Preserves whitespace and line breaks */
+            word-wrap: break-word; /* Breaks long words */
+            text-align: left;
+            min-height: 100px; /* Minimum height for text area */
+            max-height: 400px; /* Max height with scrollbar */
+            overflow-y: auto; /* Enable vertical scrolling */
+            color: #333;
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Speech-to-Text with AssemblyAI</h1>
+        <p>Drag and drop your .wav audio file here, or click to select.</p>
 
-    {% if transcript %}
-      <h2>Transcription Result:</h2>
-      <p>{{ transcript }}</p>
-    {% endif %}
-  </body>
+        <form id="upload-form" method="POST" enctype="multipart/form-data" action="/">
+            <div class="drag-area" id="drag-area">
+                <p>Drop your .wav file here</p>
+                <input type="file" name="audio_file" id="audio_file" accept=".wav">
+            </div>
+            <button type="submit" id="submit-button" style="display: none;">Transcribe</button>
+        </form>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="messages">
+                    {% for category, message in messages %}
+                        <li class="{{ category if category != 'message' else '' }}">{{ message }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        {% if transcribed_text %}
+            <div class="transcription-output">
+                <h2>Transcribed Text:</h2>
+                <div class="transcribed-text">
+                    {{ transcribed_text }}
+                </div>
+            </div>
+        {% elif error_message %}
+            <div class="transcription-output">
+                <h2>Error:</h2>
+                <p class="transcribed-text" style="color: red;">{{ error_message }}</p>
+            </div>
+        {% endif %}
+    </div>
+
+    <script>
+        const dragArea = document.getElementById('drag-area');
+        const fileInput = document.getElementById('audio_file');
+        const uploadForm = document.getElementById('upload-form');
+        // submitButton is not used as form auto-submits
+
+        // Prevent default drag/drop behaviors to allow custom handling
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dragArea.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false); // Prevent browser default for entire page
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        // Highlight drag area visually when a file is dragged over it
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dragArea.addEventListener(eventName, highlight, false);
+        });
+
+        // Remove highlight when drag leaves or drop occurs
+        ['dragleave', 'drop'].forEach(eventName => {
+            dragArea.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            dragArea.classList.add('highlight');
+        }
+
+        function unhighlight() {
+            dragArea.classList.remove('highlight');
+        }
+
+        // Handle dropped files
+        dragArea.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            
+            if (files.length > 0) {
+                // Assign the first dropped file to the hidden file input
+                fileInput.files = files;
+                // Automatically submit the form to start upload/transcription
+                uploadForm.submit();
+                alert('Uploading and transcribing... Please wait.'); // Provide user feedback
+            }
+        }
+
+        // Allow clicking the drag area to open the file selection dialog
+        dragArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // Automatically submit the form when a file is selected via the input dialog
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                uploadForm.submit();
+                alert('Uploading and transcribing... Please wait.'); // Provide user feedback
+            }
+        });
+    </script>
+</body>
 </html>
-
