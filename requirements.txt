@@ -1,5 +1,4 @@
 anyio==3.6.2
-apparmor==3.0.8
 asgiref==3.6.0
 asn1crypto==1.5.1
 attrs==22.2.0
