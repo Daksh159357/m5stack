@@ -1,113 +1,162 @@
 import os
 import time
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory
 from werkzeug.utils import secure_filename
 import assemblyai as aai
-from dotenv import load_dotenv # Used to load API key from .env file
+from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+import google.generativeai as genai
+from gtts import gTTS # Import the gTTS library
 
 app = Flask(__name__)
-# Configure upload folder and maximum file size
+
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB limit for uploads
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# Set a secret key for session management (used for flash messages)
-app.secret_key = os.urandom(24) 
+app.secret_key = os.urandom(24)
 
-# Ensure the upload folder exists when the app starts
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'audio_output'), exist_ok=True) # Create folder for TTS output
 
-# Set AssemblyAI API Key from environment variable
-# It's crucial that this line executes AFTER load_dotenv()
+load_dotenv()
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
-# Define allowed file extensions
+# --- Gemini API Key (Hardcoded - REMEMBER SECURITY WARNING) ---
+GEMINI_API_KEY = "AIzaSyCfQvgxJVrLkdPCB1vi2xZDAItugoSS60o" # Replace with your actual key if different
+genai.configure(api_key=GEMINI_API_KEY)
+# --- End of Gemini API Key ---
+
 ALLOWED_EXTENSIONS = {'wav'}
 
 def allowed_file(filename):
-    """Checks if a filename has an allowed WAV extension."""
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """
-    Handles file uploads, transcription, and displays results.
-    Renders the index.html template.
-    """
     transcribed_text = None
+    gemini_response_text = None
     error_message = None
+    transcribed_audio_file = None # To store path to TTS audio
+    gemini_audio_file = None      # To store path to TTS audio
 
     if request.method == 'POST':
-        # Check if an audio file was submitted in the form
-        if 'audio_file' not in request.files:
-            flash('No file part in the request.')
-            return redirect(request.url)
-        
-        file = request.files['audio_file']
-        
-        # If the user submits an empty file input (no file selected)
-        if file.filename == '':
-            flash('No audio file selected.')
-            return redirect(request.url)
+        if 'audio_file' in request.files:
+            file = request.files['audio_file']
 
-        # Process the file if it exists and is allowed
-        if file and allowed_file(file.filename):
-            # Secure the filename before saving to prevent directory traversal attacks
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            
-            try:
-                # Save the uploaded file locally
-                file.save(filepath)
+            if file.filename == '':
+                flash('No audio file selected.')
+                return redirect(request.url)
 
-                # Initialize AssemblyAI Transcriber
-                transcriber = aai.Transcriber()
-                
-                # Upload the local audio file to AssemblyAI's cloud
-                flash(f'Uploading "{filename}" for transcription...')
-                upload_url = transcriber.upload_file(filepath)
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
-                # Request transcription with default language (English US)
-                config = aai.TranscriptionConfig(language_code="en_us")
-                transcript = transcriber.transcribe(upload_url, config=config)
+                try:
+                    file.save(filepath)
 
-                # Check transcription status
-                if transcript.status == aai.TranscriptStatus.completed:
-                    transcribed_text = transcript.text
-                    
-                    # Save the transcribed text locally as a .txt file
-                    txt_filename = os.path.splitext(filename)[0] + ".txt"
-                    txt_filepath = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
-                    with open(txt_filepath, 'w') as f:
-                        f.write(transcribed_text)
-                    flash('File successfully uploaded and transcribed! Text saved locally.')
+                    transcriber = aai.Transcriber()
+                    flash(f'Uploading "{filename}" for transcription...')
+                    upload_url = transcriber.upload_file(filepath)
 
-                elif transcript.status == aai.TranscriptStatus.error:
-                    error_message = f"Transcription failed: {transcript.error}"
-                    flash(f"Error: {transcript.error}. Please try another file or contact support.")
-                else:
-                    # This case should be rare as .transcribe waits for completion
-                    error_message = f"Transcription status: {transcript.status}. Please try again."
-                    flash(f"Unexpected transcription status: {transcript.status}. Please try again.")
+                    config = aai.TranscriptionConfig(language_code="en_us")
+                    transcript = transcriber.transcribe(upload_url, config=config)
 
-            except Exception as e:
-                # Catch any unexpected errors during the process
-                error_message = f"An unexpected error occurred: {e}"
-                flash(f"An unexpected error occurred: {e}. Please check your API key and file.")
-            finally:
-                # Clean up: remove the temporary uploaded audio file
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-        else:
-            flash('Invalid file type. Only .wav audio files are allowed.')
+                    if transcript.status == aai.TranscriptStatus.completed:
+                        transcribed_text = transcript.text
+                        txt_filename = os.path.splitext(filename)[0] + ".txt"
+                        txt_filepath = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
+                        with open(txt_filepath, 'w') as f:
+                            f.write(transcribed_text)
+                        flash('File successfully uploaded and transcribed! Text saved locally.')
 
-    # Render the HTML template, passing transcribed text and error messages
-    return render_template('index.html', transcribed_text=transcribed_text, error_message=error_message)
+                        # --- Generate TTS for Transcribed Text ---
+                        if transcribed_text:
+                            audio_filename = "transcribed_audio_" + str(int(time.time())) + ".mp3"
+                            audio_filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'audio_output', audio_filename)
+                            try:
+                                tts = gTTS(text=transcribed_text, lang='en')
+                                tts.save(audio_filepath)
+                                transcribed_audio_file = audio_filename # Store only filename for URL
+                                flash('Generated audio for transcribed text.')
+                            except Exception as tts_e:
+                                flash(f'Error generating audio for transcribed text: {tts_e}')
+                        # --- End TTS for Transcribed Text ---
+
+                    elif transcript.status == aai.TranscriptStatus.error:
+                        error_message = f"Transcription failed: {transcript.error}"
+                        flash(f"Error: {transcript.error}. Please try another file or contact support.")
+                    else:
+                        error_message = f"Transcription status: {transcript.status}. Please try again."
+                        flash(f"Unexpected transcription status: {transcript.status}. Please try again.")
+
+                except Exception as e:
+                    error_message = f"An unexpected error occurred: {e}"
+                    flash(f"An unexpected error occurred: {e}. Please check your API key and file.")
+                finally:
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+            else:
+                flash('Invalid file type. Only .wav audio files are allowed.')
+
+        elif 'transcribed_text_for_gemini' in request.form:
+            text_to_process = request.form['transcribed_text_for_gemini']
+
+            # If the user already transcribed, carry that text over for re-display
+            # This is important if they click "Send to Gemini" without re-uploading
+            if 'original_transcribed_text' in request.form:
+                transcribed_text = request.form['original_transcribed_text']
+
+            if text_to_process:
+                try:
+                    # Use a supported Gemini model, e.g., 'gemini-1.5-flash'
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+
+                    prompt_parts = [
+                        f"Analyze the following transcribed audio text and provide a concise summary or key insights:\n\n{text_to_process}"
+                    ]
+
+                    flash('Sending text to Gemini API...')
+                    response = model.generate_content(prompt_parts)
+
+                    if response and response.text:
+                        gemini_response_text = response.text
+                        flash("Gemini API call successful!")
+
+                        # --- Generate TTS for Gemini Response ---
+                        audio_filename = "gemini_audio_" + str(int(time.time())) + ".mp3"
+                        audio_filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'audio_output', audio_filename)
+                        try:
+                            tts = gTTS(text=gemini_response_text, lang='en')
+                            tts.save(audio_filepath)
+                            gemini_audio_file = audio_filename # Store only filename for URL
+                            flash('Generated audio for Gemini response.')
+                        except Exception as tts_e:
+                            flash(f'Error generating audio for Gemini response: {tts_e}')
+                        # --- End TTS for Gemini Response ---
+
+                    else:
+                        error_message = "Gemini API returned an empty or invalid response."
+                        flash("Gemini API returned an empty or invalid response.")
+
+                except Exception as e:
+                    error_message = f"Error communicating with Gemini API: {e}"
+                    flash(f"Error with Gemini API: {e}. Check your API key and network.")
+            else:
+                flash("No transcribed text to send to Gemini.")
+
+    # Pass all relevant variables to the template
+    return render_template('index.html',
+                           transcribed_text=transcribed_text,
+                           gemini_response_text=gemini_response_text,
+                           transcribed_audio_file=transcribed_audio_file,
+                           gemini_audio_file=gemini_audio_file,
+                           error_message=error_message)
+
+# New route to serve the generated audio files
+@app.route('/uploads/audio_output/<filename>')
+def serve_audio(filename):
+    return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'audio_output'), filename)
 
 if __name__ == '__main__':
-    # Run the Flask development server
-    # debug=True enables auto-reloading on code changes and provides a debugger
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0')

@@ -3,217 +3,167 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Speech-to-Text App</title>
+    <title>AI Audio Processing Hub</title>
     <style>
-        /* Basic styling for the body */
         body {
             font-family: Arial, sans-serif;
+            margin: 20px;
             background-color: #f4f4f4;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            flex-direction: column;
-            padding: 20px; /* Add some padding for smaller screens */
-            box-sizing: border-box; /* Include padding in element's total width and height */
-        }
-        /* Container for the main content */
-        .container {
-            background-color: #fff;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            width: 100%; /* Make it responsive */
-            max-width: 600px; /* Max width for larger screens */
-            text-align: center;
-        }
-        /* Heading style */
-        h1 {
             color: #333;
-            margin-bottom: 20px;
         }
-        /* Drag-and-drop area styling */
-        .drag-area {
-            border: 2px dashed #ccc;
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
             border-radius: 8px;
-            padding: 40px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #0056b3;
             text-align: center;
-            cursor: pointer;
-            margin-bottom: 20px;
-            transition: border-color 0.3s ease; /* Smooth transition for highlight */
         }
-        .drag-area.highlight {
-            border-color: #007bff; /* Blue border when dragged over */
+        .flash-messages {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
         }
-        .drag-area p {
-            margin: 0;
-            color: #555;
+        .flash-messages li {
+            background-color: #dff0d8;
+            color: #3c763d;
+            border: 1px solid #d6e9c6;
+            padding: 10px;
+            margin-bottom: 5px;
+            border-radius: 4px;
         }
-        /* Hide the default file input */
+        .error-message {
+            background-color: #f2dede;
+            color: #a94442;
+            border: 1px solid #ebccd1;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        form {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #fafafa;
+        }
         input[type="file"] {
-            display: none;
+            margin-bottom: 10px;
         }
-        /* Button styling (though hidden by JS for auto-submit) */
-        button {
+        input[type="submit"] {
             background-color: #007bff;
             color: white;
-            padding: 10px 20px;
+            padding: 10px 15px;
             border: none;
             border-radius: 5px;
             cursor: pointer;
             font-size: 16px;
-            transition: background-color 0.3s ease;
         }
-        button:hover {
+        input[type="submit"]:hover {
             background-color: #0056b3;
         }
-        /* Styling for flashed messages */
-        .messages {
-            list-style: none;
-            padding: 0;
-            margin-top: 20px;
-        }
-        .messages li {
-            background-color: #d4edda; /* Light green for success */
-            color: #155724; /* Dark green text */
-            border: 1px solid #c3e6cb;
-            padding: 10px;
-            border-radius: 5px;
-            margin-bottom: 10px;
-        }
-        .messages li.error {
-            background-color: #f8d7da; /* Light red for errors */
-            color: #721c24; /* Dark red text */
-            border-color: #f5c6cb;
-        }
-        /* Styling for the transcription output area */
-        .transcription-output {
+        .results-section {
             margin-top: 30px;
-            text-align: left;
             border-top: 1px solid #eee;
             padding-top: 20px;
         }
-        .transcription-output h2 {
-            color: #333;
-            margin-bottom: 10px;
-        }
-        .transcribed-text {
-            background-color: #e9ecef;
+        .result-box {
+            background-color: #e9e9e9;
+            border: 1px solid #ccc;
             padding: 15px;
             border-radius: 5px;
-            white-space: pre-wrap; /* Preserves whitespace and line breaks */
-            word-wrap: break-word; /* Breaks long words */
-            text-align: left;
-            min-height: 100px; /* Minimum height for text area */
-            max-height: 400px; /* Max height with scrollbar */
-            overflow-y: auto; /* Enable vertical scrolling */
-            color: #333;
-            font-size: 1.1em;
+            margin-bottom: 20px;
+            white-space: pre-wrap; /* Preserve whitespace and line breaks */
+            word-wrap: break-word; /* Break long words */
+        }
+        h2 {
+            color: #0056b3;
+        }
+        .gemini-form {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #fafafa;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box; /* Include padding in element's total width and height */
+        }
+        audio {
+            width: 100%;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Speech-to-Text with AssemblyAI</h1>
-        <p>Drag and drop your .wav audio file here, or click to select.</p>
+        <h1>AI Audio Processing Hub</h1>
 
-        <form id="upload-form" method="POST" enctype="multipart/form-data" action="/">
-            <div class="drag-area" id="drag-area">
-                <p>Drop your .wav file here</p>
-                <input type="file" name="audio_file" id="audio_file" accept=".wav">
-            </div>
-            <button type="submit" id="submit-button" style="display: none;">Transcribe</button>
-        </form>
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% with messages = get_flashed_messages() %}
             {% if messages %}
-                <ul class="messages">
-                    {% for category, message in messages %}
-                        <li class="{{ category if category != 'message' else '' }}">{{ message }}</li>
+                <ul class="flash-messages">
+                    {% for message in messages %}
+                        <li>{{ message }}</li>
                     {% endfor %}
                 </ul>
             {% endif %}
         {% endwith %}
 
+        {% if error_message %}
+            <p class="error-message">{{ error_message }}</p>
+        {% endif %}
+
+        <h2>Upload Audio File (.wav)</h2>
+        <form method="POST" enctype="multipart/form-data">
+            <input type="file" name="audio_file" accept=".wav">
+            <input type="submit" value="Upload & Transcribe">
+        </form>
+
         {% if transcribed_text %}
-            <div class="transcription-output">
-                <h2>Transcribed Text:</h2>
-                <div class="transcribed-text">
+            <div class="results-section">
+                <h2>Transcribed Text from AssemblyAI:</h2>
+                <div class="result-box">
                     {{ transcribed_text }}
+                    {% if transcribed_audio_file %}
+                        <audio controls src="{{ url_for('serve_audio', filename=transcribed_audio_file) }}" type="audio/mpeg">
+                            Your browser does not support the audio element.
+                        </audio>
+                    {% endif %}
                 </div>
+
+                <h2>Process with Gemini AI:</h2>
+                <form method="POST" class="gemini-form">
+                    <p>The transcribed text will be sent to Gemini for analysis:</p>
+                    <textarea name="transcribed_text_for_gemini" readonly>{{ transcribed_text }}</textarea>
+                    <input type="hidden" name="original_transcribed_text" value="{{ transcribed_text }}">
+                    <input type="submit" value="Send to Gemini">
+                </form>
             </div>
-        {% elif error_message %}
-            <div class="transcription-output">
-                <h2>Error:</h2>
-                <p class="transcribed-text" style="color: red;">{{ error_message }}</p>
+        {% endif %}
+
+        {% if gemini_response_text %}
+            <div class="results-section">
+                <h2>Gemini AI Response:</h2>
+                <div class="result-box">
+                    {{ gemini_response_text }}
+                    {% if gemini_audio_file %}
+                        <audio controls src="{{ url_for('serve_audio', filename=gemini_audio_file) }}" type="audio/mpeg">
+                            Your browser does not support the audio element.
+                        </audio>
+                    {% endif %}
+                </div>
             </div>
         {% endif %}
     </div>
-
-    <script>
-        const dragArea = document.getElementById('drag-area');
-        const fileInput = document.getElementById('audio_file');
-        const uploadForm = document.getElementById('upload-form');
-        // submitButton is not used as form auto-submits
-
-        // Prevent default drag/drop behaviors to allow custom handling
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dragArea.addEventListener(eventName, preventDefaults, false);
-            document.body.addEventListener(eventName, preventDefaults, false); // Prevent browser default for entire page
-        });
-
-        function preventDefaults(e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-
-        // Highlight drag area visually when a file is dragged over it
-        ['dragenter', 'dragover'].forEach(eventName => {
-            dragArea.addEventListener(eventName, highlight, false);
-        });
-
-        // Remove highlight when drag leaves or drop occurs
-        ['dragleave', 'drop'].forEach(eventName => {
-            dragArea.addEventListener(eventName, unhighlight, false);
-        });
-
-        function highlight() {
-            dragArea.classList.add('highlight');
-        }
-
-        function unhighlight() {
-            dragArea.classList.remove('highlight');
-        }
-
-        // Handle dropped files
-        dragArea.addEventListener('drop', handleDrop, false);
-
-        function handleDrop(e) {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            
-            if (files.length > 0) {
-                // Assign the first dropped file to the hidden file input
-                fileInput.files = files;
-                // Automatically submit the form to start upload/transcription
-                uploadForm.submit();
-                alert('Uploading and transcribing... Please wait.'); // Provide user feedback
-            }
-        }
-
-        // Allow clicking the drag area to open the file selection dialog
-        dragArea.addEventListener('click', () => {
-            fileInput.click();
-        });
-
-        // Automatically submit the form when a file is selected via the input dialog
-        fileInput.addEventListener('change', () => {
-            if (fileInput.files.length > 0) {
-                uploadForm.submit();
-                alert('Uploading and transcribing... Please wait.'); // Provide user feedback
-            }
-        });
-    </script>
 </body>
 </html>
